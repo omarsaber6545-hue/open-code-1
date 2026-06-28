@@ -1016,6 +1016,8 @@ function renderServices(servicesList) {
     document.querySelectorAll(".btn-buy-now").forEach(btn => {
         btn.onclick = () => {
             const prodId = btn.getAttribute("data-product-id");
+            const srv = (adminMode ? draftState[currentLang] : liveState[currentLang]).services.find(x => x.id === prodId);
+            if (srv) trackProductView(srv.name);
             openPurchaseModal(prodId);
         };
     });
@@ -2928,6 +2930,32 @@ function wireEvents() {
         document.getElementById("admin-logs-modal").classList.remove("active");
     };
 
+    // Analytics button
+    const tbAnalytics = document.getElementById("tb-toggle-analytics");
+    if (tbAnalytics) {
+        tbAnalytics.onclick = () => {
+            const modal = document.getElementById("admin-analytics-modal");
+            if (modal) {
+                modal.classList.add("active");
+                renderAnalyticsDashboard();
+                addAuditLog("Analytics dashboard accessed.");
+            }
+        };
+    }
+    document.getElementById("admin-analytics-close").onclick = () => {
+        document.getElementById("admin-analytics-modal").classList.remove("active");
+    };
+    // Analytics tab switching
+    document.querySelectorAll("#admin-analytics-modal .m-tab-btn").forEach(btn => {
+        btn.onclick = () => {
+            document.querySelectorAll("#admin-analytics-modal .m-tab-btn").forEach(b => b.classList.remove("active"));
+            btn.classList.add("active");
+            document.querySelectorAll("#admin-analytics-modal .m-tab-pane").forEach(p => p.classList.remove("active"));
+            const pane = document.getElementById(btn.getAttribute("data-mtab"));
+            if (pane) pane.classList.add("active");
+        };
+    });
+
     if (tbDiscard) {
         tbDiscard.onclick = () => {
             if (confirm("هل تود بالتأكيد التراجع عن كافة التغييرات الحالية واستعادة النسخة المنشورة؟")) {
@@ -3713,6 +3741,8 @@ function runPreloader() {
     if (!preloader) {
         initStates();
         wireEvents();
+        trackVisitor();
+        trackActivity("visit", "زائر جديد دخل الموقع");
         return;
     }
     
@@ -3726,6 +3756,8 @@ function runPreloader() {
             // Trigger initialization
             initStates();
             wireEvents();
+            trackVisitor();
+            trackActivity("visit", "زائر جديد دخل الموقع");
             setupCustomCursor();
             setupLiveChatBot();
             setupBackToTop();
@@ -4518,6 +4550,298 @@ function updateCouponStats() {
         savingsEl.innerText = totalSavings;
     }
 }
+
+// --- Analytics Engine ---
+function initAnalytics() {
+    if (!localStorage.getItem("3m_analytics_visitors")) {
+        localStorage.setItem("3m_analytics_visitors", JSON.stringify({ total: 0, daily: {} }));
+    }
+    if (!localStorage.getItem("3m_analytics_views")) {
+        localStorage.setItem("3m_analytics_views", JSON.stringify({}));
+    }
+    if (!localStorage.getItem("3m_analytics_activity")) {
+        localStorage.setItem("3m_analytics_activity", JSON.stringify([]));
+    }
+}
+
+function trackVisitor() {
+    initAnalytics();
+    const data = JSON.parse(localStorage.getItem("3m_analytics_visitors"));
+    data.total = (data.total || 0) + 1;
+    const today = new Date().toISOString().split("T")[0];
+    if (!data.daily[today]) data.daily[today] = 0;
+    data.daily[today]++;
+    localStorage.setItem("3m_analytics_visitors", JSON.stringify(data));
+}
+
+function trackProductView(serviceName) {
+    initAnalytics();
+    const views = JSON.parse(localStorage.getItem("3m_analytics_views"));
+    if (!views[serviceName]) views[serviceName] = 0;
+    views[serviceName]++;
+    localStorage.setItem("3m_analytics_views", JSON.stringify(views));
+}
+
+function trackActivity(action, details) {
+    initAnalytics();
+    const activities = JSON.parse(localStorage.getItem("3m_analytics_activity"));
+    activities.unshift({
+        action: action,
+        details: details,
+        time: new Date().toISOString()
+    });
+    if (activities.length > 200) activities.length = 200;
+    localStorage.setItem("3m_analytics_activity", JSON.stringify(activities));
+}
+
+function getAnalyticsVisitors() {
+    const data = JSON.parse(localStorage.getItem("3m_analytics_visitors")) || { total: 0, daily: {} };
+    const today = new Date().toISOString().split("T")[0];
+    const todayVisitors = data.daily[today] || 0;
+    const now = new Date();
+    const weekStart = new Date(now); weekStart.setDate(weekStart.getDate() - weekStart.getDay());
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    let weekVisitors = 0, monthVisitors = 0;
+    for (const [day, count] of Object.entries(data.daily)) {
+        const d = new Date(day + "T00:00:00");
+        if (!isNaN(d.getTime())) {
+            if (d >= weekStart) weekVisitors += count;
+            if (d >= monthStart) monthVisitors += count;
+        }
+    }
+    return { total: data.total || 0, today: todayVisitors, week: weekVisitors, month: monthVisitors, daily: data.daily };
+}
+
+function getAnalyticsViews() {
+    return JSON.parse(localStorage.getItem("3m_analytics_views")) || {};
+}
+
+function getAnalyticsOrders() {
+    try { return JSON.parse(localStorage.getItem("3m_studio_orders")) || []; }
+    catch(e) { return []; }
+}
+
+function getAnalyticsActivity() {
+    return JSON.parse(localStorage.getItem("3m_analytics_activity")) || [];
+}
+
+function renderAnalyticsDashboard() {
+    renderVisitorsTab();
+    renderViewsTab();
+    renderSalesTab();
+    renderActivityTab();
+    renderRevenueTab();
+    renderPopularTab();
+}
+
+function renderVisitorsTab() {
+    const v = getAnalyticsVisitors();
+    document.getElementById("analytics-total-visitors").innerText = v.total;
+    document.getElementById("analytics-today-visitors").innerText = v.today;
+    document.getElementById("analytics-week-visitors").innerText = v.week;
+    document.getElementById("analytics-month-visitors").innerText = v.month;
+    const chart = document.getElementById("analytics-visitors-chart");
+    chart.innerHTML = "";
+    const days = [];
+    for (let i = 6; i >= 0; i--) {
+        const d = new Date(); d.setDate(d.getDate() - i);
+        const key = d.toISOString().split("T")[0];
+        days.push({ label: key.slice(5), count: v.daily[key] || 0 });
+    }
+    const maxCount = Math.max(1, ...days.map(d => d.count));
+    days.forEach(day => {
+        const item = document.createElement("div");
+        item.className = "bar-chart-item";
+        const bar = document.createElement("div");
+        bar.className = "bar-chart-bar";
+        bar.style.height = Math.max(4, (day.count / maxCount) * 120) + "px";
+        const label = document.createElement("span");
+        label.className = "bar-chart-label";
+        label.innerText = day.label;
+        const val = document.createElement("span");
+        val.className = "bar-chart-value";
+        val.innerText = day.count;
+        item.appendChild(bar);
+        item.appendChild(label);
+        item.appendChild(val);
+        chart.appendChild(item);
+    });
+}
+
+function renderViewsTab() {
+    const views = getAnalyticsViews();
+    const names = Object.keys(views);
+    names.sort((a, b) => views[b] - views[a]);
+    const totalViews = names.reduce((s, n) => s + views[n], 0) || 1;
+    const tbody = document.getElementById("analytics-views-list");
+    tbody.innerHTML = "";
+    names.forEach(name => {
+        const count = views[name];
+        const pct = ((count / totalViews) * 100).toFixed(1);
+        const section = name.includes(" - ") ? name.split(" - ")[0] : name;
+        tbody.innerHTML += `<tr><td>${name}</td><td>${section}</td><td>${count}</td><td>${pct}%</td></tr>`;
+    });
+    if (!names.length) tbody.innerHTML = '<tr><td colspan="4" style="text-align:center;color:var(--text-muted);">لا توجد مشاهدات مسجلة بعد</td></tr>';
+}
+
+function renderSalesTab() {
+    const orders = getAnalyticsOrders();
+    const total = orders.length;
+    const paid = orders.filter(o => o.paid || o.status === "paid" || o.status === "completed").length;
+    const failed = orders.filter(o => o.status === "failed" || o.status === "cancelled").length;
+    const pending = total - paid - failed;
+    document.getElementById("analytics-total-orders").innerText = total;
+    document.getElementById("analytics-paid-orders").innerText = paid;
+    document.getElementById("analytics-failed-orders").innerText = failed;
+    document.getElementById("analytics-pending-orders").innerText = Math.max(0, pending);
+    const chart = document.getElementById("analytics-payment-chart");
+    const methods = {};
+    orders.forEach(o => {
+        const m = o.paymentMethod || o.method || "Unknown";
+        methods[m] = (methods[m] || 0) + 1;
+    });
+    chart.innerHTML = "";
+    const maxMethod = Math.max(1, ...Object.values(methods));
+    Object.entries(methods).forEach(([method, count]) => {
+        const item = document.createElement("div");
+        item.className = "bar-chart-item";
+        const bar = document.createElement("div");
+        bar.className = "bar-chart-bar";
+        bar.style.height = Math.max(4, (count / maxMethod) * 120) + "px";
+        const label = document.createElement("span");
+        label.className = "bar-chart-label";
+        label.innerText = method;
+        const val = document.createElement("span");
+        val.className = "bar-chart-value";
+        val.innerText = count;
+        item.appendChild(bar);
+        item.appendChild(label);
+        item.appendChild(val);
+        chart.appendChild(item);
+    });
+}
+
+function renderActivityTab() {
+    const activities = getAnalyticsActivity();
+    const list = document.getElementById("analytics-activity-list");
+    list.innerHTML = "";
+    if (!activities.length) {
+        list.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text-muted);">لا يوجد نشاط مسجل بعد</div>';
+        return;
+    }
+    activities.forEach(a => {
+        const div = document.createElement("div");
+        div.className = "activity-item";
+        const dot = document.createElement("span");
+        dot.className = "activity-dot " + (a.action || "view");
+        const text = document.createElement("span");
+        text.className = "activity-text";
+        text.innerText = a.details || a.action;
+        const time = document.createElement("span");
+        time.className = "activity-time";
+        const d = new Date(a.time);
+        time.innerText = d.toLocaleString("ar-SA");
+        div.appendChild(dot);
+        div.appendChild(text);
+        div.appendChild(time);
+        list.appendChild(div);
+    });
+}
+
+function computeRevenue() {
+    const orders = getAnalyticsOrders();
+    let totalRevenue = 0;
+    let monthRevenue = 0;
+    let orderCount = 0;
+    const now = new Date();
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+    const monthlyRevenue = {};
+    orders.forEach(o => {
+        if (o.paid || o.status === "paid" || o.status === "completed") {
+            const price = parseFloat(o.total) || parseFloat(o.price) || 0;
+            totalRevenue += price;
+            orderCount++;
+            const d = o.createdAt ? new Date(o.createdAt) : null;
+            if (d && d >= monthStart) monthRevenue += price;
+            if (d) {
+                const monthKey = d.getFullYear() + "-" + String(d.getMonth() + 1).padStart(2, "0");
+                monthlyRevenue[monthKey] = (monthlyRevenue[monthKey] || 0) + price;
+            }
+        }
+    });
+    const avgOrder = orderCount > 0 ? (totalRevenue / orderCount) : 0;
+    const visitors = getAnalyticsVisitors();
+    const conversionRate = visitors.total > 0 ? ((orderCount / visitors.total) * 100) : 0;
+    return { totalRevenue, monthRevenue, avgOrder, conversionRate: conversionRate.toFixed(1), monthlyRevenue, orderCount };
+}
+
+function renderRevenueTab() {
+    const rev = computeRevenue();
+    document.getElementById("analytics-total-revenue").innerText = "$" + rev.totalRevenue.toFixed(2);
+    document.getElementById("analytics-month-revenue").innerText = "$" + rev.monthRevenue.toFixed(2);
+    document.getElementById("analytics-avg-order").innerText = "$" + rev.avgOrder.toFixed(2);
+    document.getElementById("analytics-conversion-rate").innerText = rev.conversionRate + "%";
+    const chart = document.getElementById("analytics-revenue-chart");
+    chart.innerHTML = "";
+    const months = Object.keys(rev.monthlyRevenue).sort().slice(-12);
+    const maxRev = Math.max(1, ...months.map(m => rev.monthlyRevenue[m]));
+    months.forEach(month => {
+        const amount = rev.monthlyRevenue[month];
+        const item = document.createElement("div");
+        item.className = "bar-chart-item";
+        const bar = document.createElement("div");
+        bar.className = "bar-chart-bar";
+        bar.style.height = Math.max(4, (amount / maxRev) * 120) + "px";
+        const label = document.createElement("span");
+        label.className = "bar-chart-label";
+        label.innerText = month.slice(5);
+        const val = document.createElement("span");
+        val.className = "bar-chart-value";
+        val.innerText = "$" + amount.toFixed(0);
+        item.appendChild(bar);
+        item.appendChild(label);
+        item.appendChild(val);
+        chart.appendChild(item);
+    });
+}
+
+function renderPopularTab() {
+    const orders = getAnalyticsOrders();
+    const serviceCounts = {};
+    let totalServiceOrders = 0;
+    orders.forEach(o => {
+        if (o.paid || o.status === "paid" || o.status === "completed") {
+            const items = o.items || (o.service ? [o.service] : []);
+            (Array.isArray(items) ? items : [items]).forEach(item => {
+                const name = typeof item === "string" ? item : (item.name || item.service || "Unknown");
+                const price = typeof item === "object" ? (parseFloat(item.price) || 0) : 0;
+                if (!serviceCounts[name]) serviceCounts[name] = { count: 0, revenue: 0 };
+                serviceCounts[name].count++;
+                serviceCounts[name].revenue += price;
+                totalServiceOrders++;
+            });
+        }
+    });
+    const sorted = Object.entries(serviceCounts).sort((a, b) => b[1].count - a[1].count);
+    const tbody = document.getElementById("analytics-popular-list");
+    tbody.innerHTML = "";
+    if (!sorted.length) {
+        tbody.innerHTML = '<tr><td colspan="5" style="text-align:center;color:var(--text-muted);">لا توجد طلبات مكتملة بعد</td></tr>';
+        return;
+    }
+    sorted.forEach(([name, data], i) => {
+        const pct = totalServiceOrders > 0 ? ((data.count / totalServiceOrders) * 100).toFixed(1) : "0.0";
+        tbody.innerHTML += `<tr><td>${i + 1}</td><td>${name}</td><td>${data.count}</td><td>$${data.revenue.toFixed(2)}</td><td>${pct}%</td></tr>`;
+    });
+}
+
+// Clear activity
+document.addEventListener("click", function(e) {
+    if (e.target && e.target.id === "btn-clear-activity") {
+        localStorage.setItem("3m_analytics_activity", JSON.stringify([]));
+        renderActivityTab();
+    }
+});
 
 // --- Startup Launcher ---
 if (document.readyState === "loading") {
