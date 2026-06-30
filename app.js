@@ -3416,7 +3416,7 @@ function wireEvents() {
     }
 
     // Reset coupon on modal close (purchase modal)
-    const purchaseModal = document.getElementById("purchase-modal");
+    purchaseModal = document.getElementById("purchase-modal");
     if (purchaseModal) {
         purchaseModal.addEventListener("click", (e) => {
             if (e.target === purchaseModal) {
